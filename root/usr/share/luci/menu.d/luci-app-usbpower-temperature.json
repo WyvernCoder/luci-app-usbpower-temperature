@@ -1,0 +1,14 @@
+{
+	"admin/system/usbpower-temperature": {
+		"title": "USB Thermal Fan",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "usbpower-temperature/overview-v3"
+		},
+		"depends": {
+			"acl": [ "luci-app-usbpower-temperature" ],
+			"uci": { "usbpower_temperature": true }
+		}
+	}
+}

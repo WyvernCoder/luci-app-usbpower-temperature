@@ -1,0 +1,649 @@
+#!/bin/sh
+# usbpowerd - temperature controller for a switched USB port.
+#
+# Commands:
+#   run           run the control loop (started by procd)
+#   check         validate the UCI configuration, exit 1 on error
+#   status-json   print one-line JSON status for the LuCI frontend
+#   detect        print JSON with detected power targets and temperature sensors
+#
+# The backend abstraction supports:
+#   gpio       - write 0/1 to a sysfs GPIO value file
+#   uhubctl    - use uhubctl to switch a hub port
+#   regulator  - write enabled/disabled to a regulator state file
+#   command    - run user supplied shell commands
+
+export LC_ALL=C
+
+CONFIG=usbpower_temperature
+SECTION=settings
+STATE_FILE=/var/run/usbpowerd.state
+PID_FILE=/var/run/usbpowerd.pid
+HISTORY_FILE=/tmp/usbpowerd.history
+HISTORY_LIMIT=10
+LOG_FILE=/tmp/usbpowerd.log
+LOG_LIMIT=50
+STATUS_CACHE=/tmp/usbpowerd.status.json
+
+log() {
+	local msg="$*" tmp="${LOG_FILE}.$$"
+
+	logger -t usbpowerd "$msg"
+	printf '%s|%s\n' "$(date +%s)" "$msg" >> "$LOG_FILE" 2>/dev/null
+	tail -n "$LOG_LIMIT" "$LOG_FILE" > "$tmp" 2>/dev/null && mv "$tmp" "$LOG_FILE"
+}
+
+cfg() {
+	uci -q get "$CONFIG.$SECTION.$1" 2>/dev/null
+}
+
+is_uint() {
+	case "$1" in
+		''|*[!0-9]*) return 1 ;;
+		*) return 0 ;;
+	esac
+}
+
+jesc() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+load_config() {
+	enabled=$(cfg enabled);             [ -n "$enabled" ] || enabled=0
+	mode=$(cfg mode);                   [ -n "$mode" ] || mode=auto
+	backend=$(cfg backend);             [ -n "$backend" ] || backend=gpio
+	gpio_path=$(cfg gpio_path)
+	uhubctl_location=$(cfg uhubctl_location)
+	uhubctl_port=$(cfg uhubctl_port);   [ -n "$uhubctl_port" ] || uhubctl_port=1
+	regulator_path=$(cfg regulator_path)
+	command_on=$(cfg command_on)
+	command_off=$(cfg command_off)
+	command_state=$(cfg command_state)
+	sensor=$(cfg sensor);               [ -n "$sensor" ] || sensor=/sys/class/thermal/thermal_zone0/temp
+	sensor_divisor=$(cfg sensor_divisor); [ -n "$sensor_divisor" ] || sensor_divisor=1000
+	on_threshold=$(cfg on_threshold);   [ -n "$on_threshold" ] || on_threshold=65
+	off_threshold=$(cfg off_threshold); [ -n "$off_threshold" ] || off_threshold=60
+	poll_interval=$(cfg poll_interval); [ -n "$poll_interval" ] || poll_interval=10
+	min_on_time=$(cfg min_on_time);     [ -n "$min_on_time" ] || min_on_time=300
+	min_off_time=$(cfg min_off_time);   [ -n "$min_off_time" ] || min_off_time=120
+	storage_guard=$(cfg storage_guard); [ -n "$storage_guard" ] || storage_guard=1
+}
+
+check_config() {
+	is_uint "$sensor_divisor" && [ "$sensor_divisor" -ge 1 ] || {
+		echo "sensor_divisor must be a positive integer" >&2
+		return 1
+	}
+	is_uint "$on_threshold" || {
+		echo "on_threshold must be an integer" >&2
+		return 1
+	}
+	is_uint "$off_threshold" || {
+		echo "off_threshold must be an integer" >&2
+		return 1
+	}
+	[ "$on_threshold" -gt "$off_threshold" ] || {
+		echo "on_threshold must be greater than off_threshold" >&2
+		return 1
+	}
+	is_uint "$poll_interval" && [ "$poll_interval" -ge 2 ] || {
+		echo "poll_interval must be an integer >= 2" >&2
+		return 1
+	}
+	is_uint "$min_on_time" || {
+		echo "min_on_time must be an integer" >&2
+		return 1
+	}
+	is_uint "$min_off_time" || {
+		echo "min_off_time must be an integer" >&2
+		return 1
+	}
+	is_uint "$uhubctl_port" || {
+		echo "uhubctl_port must be an integer" >&2
+		return 1
+	}
+
+	case "$mode" in
+		auto|always_on|always_off) ;;
+		*)
+			echo "mode must be auto, always_on or always_off" >&2
+			return 1
+			;;
+	esac
+
+	case "$backend" in
+		gpio)
+			[ -n "$gpio_path" ] || {
+				echo "gpio_path is not configured" >&2
+				return 1
+			}
+			[ -e "$gpio_path" ] || {
+				echo "gpio_path does not exist: $gpio_path" >&2
+				return 1
+			}
+			;;
+		uhubctl)
+			command -v uhubctl >/dev/null 2>&1 || {
+				echo "uhubctl is not installed" >&2
+				return 1
+			}
+			[ -n "$uhubctl_location" ] || {
+				echo "uhubctl_location is not configured" >&2
+				return 1
+			}
+			;;
+		regulator)
+			[ -n "$regulator_path" ] || {
+				echo "regulator_path is not configured" >&2
+				return 1
+			}
+			[ -e "$regulator_path" ] || {
+				echo "regulator_path does not exist: $regulator_path" >&2
+				return 1
+			}
+			;;
+		command)
+			[ -n "$command_on" ] && [ -n "$command_off" ] || {
+				echo "command_on and command_off are required" >&2
+				return 1
+			}
+			;;
+		*)
+			echo "backend must be gpio, uhubctl, regulator or command" >&2
+			return 1
+			;;
+	esac
+
+	[ -n "$sensor" ] || {
+		echo "sensor is not configured" >&2
+		return 1
+	}
+	return 0
+}
+
+backend_read() {
+	local value out state
+
+	case "$backend" in
+		gpio)
+			[ -r "$gpio_path" ] || { echo unknown; return; }
+			value=$(cat "$gpio_path" 2>/dev/null)
+			case "$value" in
+				0|1) echo "$value" ;;
+				*) echo unknown ;;
+			esac
+			;;
+		regulator)
+			value=$(cat "$regulator_path" 2>/dev/null)
+			case "$value" in
+				enabled|1) echo 1 ;;
+				disabled|0) echo 0 ;;
+				*) echo unknown ;;
+			esac
+			;;
+		uhubctl)
+			out=$(uhubctl -l "$uhubctl_location" -p "$uhubctl_port" 2>/dev/null) || {
+				echo unknown
+				return
+			}
+			state=$(printf '%s\n' "$out" | awk -v p="$uhubctl_port" '
+				$1 == "Port" && $2 == p ":" {
+					if ($0 ~ / power/) print 1; else print 0;
+					exit
+				}')
+			echo "${state:-unknown}"
+			;;
+		command)
+			if [ -n "$command_state" ]; then
+				value=$(sh -c "$command_state" 2>/dev/null | tr -d '[:space:]')
+				case "$value" in
+					0|1) echo "$value" ;;
+					*) echo unknown ;;
+				esac
+			else
+				echo unknown
+			fi
+			;;
+		*)
+			echo unknown
+			;;
+	esac
+}
+
+backend_write() {
+	local level="$1"
+
+	case "$backend" in
+		gpio)
+			echo "$level" > "$gpio_path" 2>/dev/null
+			;;
+		regulator)
+			if [ "$level" = "1" ]; then
+				echo enabled > "$regulator_path" 2>/dev/null
+			else
+				echo disabled > "$regulator_path" 2>/dev/null
+			fi
+			;;
+		uhubctl)
+			if [ "$level" = "1" ]; then
+				uhubctl -l "$uhubctl_location" -p "$uhubctl_port" -a on >/dev/null 2>&1
+			else
+				uhubctl -l "$uhubctl_location" -p "$uhubctl_port" -a off >/dev/null 2>&1
+			fi
+			;;
+		command)
+			if [ "$level" = "1" ]; then
+				sh -c "$command_on"
+			else
+				sh -c "$command_off"
+			fi
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+verify_level() {
+	local want="$1" i=0 got
+
+	if [ "$backend" = "command" ] && [ -z "$command_state" ]; then
+		return 0
+	fi
+	while [ "$i" -lt 3 ]; do
+		got=$(backend_read)
+		[ "$got" = "$want" ] && return 0
+		i=$((i + 1))
+		[ "$i" -lt 3 ] && sleep 1
+	done
+	return 1
+}
+
+storage_mounted() {
+	[ "$storage_guard" = "1" ] || return 1
+	mount 2>/dev/null | grep -q '^/dev/sd'
+}
+
+write_state() {
+	local state_name="$1" temp_value="$2" reason="$3" tmp="$STATE_FILE.$$"
+
+	{
+		echo "state=$state_name"
+		echo "temp=$temp_value"
+		echo "mode=$mode"
+		echo "last_change=$last_change"
+		echo "reason=$reason"
+		echo "sensor_ok=$sensor_ok"
+	} > "$tmp" 2>/dev/null && mv "$tmp" "$STATE_FILE"
+}
+
+state_get() {
+	sed -n "s/^$1=//p" "$STATE_FILE" 2>/dev/null | head -n 1
+}
+
+record_event() {
+	local state_name="$1" reason="$2" temp_value="$3" tmp="${HISTORY_FILE}.$$"
+
+	printf '%s|%s|%s|%s\n' "$(date +%s)" "$state_name" "$reason" "$temp_value" >> "$HISTORY_FILE" 2>/dev/null || return 1
+	tail -n "$HISTORY_LIMIT" "$HISTORY_FILE" > "$tmp" 2>/dev/null && mv "$tmp" "$HISTORY_FILE"
+}
+
+history_json() {
+	local first=1 ts state_name reason temp_value
+
+	[ -r "$HISTORY_FILE" ] || { printf '[]'; return; }
+
+	printf '['
+	tail -n "$HISTORY_LIMIT" "$HISTORY_FILE" | while IFS='|' read -r ts state_name reason temp_value; do
+		case "$ts" in
+			''|*[!0-9]*) continue ;;
+		esac
+		case "$state_name" in
+			on|off) ;;
+			*) continue ;;
+		esac
+		printf '%s' "$temp_value" | grep -Eq '^-?[0-9]+(\.[0-9]+)?$' || temp_value=-1
+		[ "$first" = "1" ] || printf ','
+		first=0
+		printf '{"ts":%s,"state":"%s","reason":"%s","temp":%s}' \
+			"$ts" "$(jesc "$state_name")" "$(jesc "$reason")" "$temp_value"
+	done
+	printf ']'
+}
+
+logs_json() {
+	local first=1 ts msg
+
+	[ -r "$LOG_FILE" ] || { printf '[]'; return; }
+
+	printf '['
+	tail -n "$LOG_LIMIT" "$LOG_FILE" | while IFS='|' read -r ts msg; do
+		case "$ts" in
+			''|*[!0-9]*) continue ;;
+		esac
+		[ "$first" = "1" ] || printf ','
+		first=0
+		printf '{"ts":%s,"msg":"%s"}' "$ts" "$(jesc "$msg")"
+	done
+	printf ']'
+}
+
+temp_to_display() {
+	local d="$sensor_divisor"
+
+	case "$d" in
+		''|*[!0-9]*|0) d=1000 ;;
+	esac
+	awk -v t="$1" -v d="$d" 'BEGIN { printf "%.1f", t / d }'
+}
+
+read_temp_milli() {
+	local raw
+
+	raw=$(cat "$sensor" 2>/dev/null) || return 1
+	raw=$(printf '%s' "$raw" | tr -d '[:space:]')
+	case "$raw" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	printf '%s' "$raw"
+}
+
+may_switch() {
+	local now elapsed
+
+	now=$(date +%s)
+	case "$last_change" in
+		''|*[!0-9]*) last_change="$now"; return 0 ;;
+	esac
+	elapsed=$((now - last_change))
+	if [ "$current" = "1" ]; then
+		[ "$elapsed" -ge "$min_on_time" ]
+	else
+		[ "$elapsed" -ge "$min_off_time" ]
+	fi
+}
+
+set_level() {
+	local want="$1" reason="$2" state_name
+
+	if ! backend_write "$want"; then
+		log "failed to set USB power to $want ($reason)"
+		return 1
+	fi
+	if ! verify_level "$want"; then
+		log "readback mismatch after setting USB power to $want ($reason)"
+		return 1
+	fi
+
+	current="$want"
+	last_change=$(date +%s)
+	last_reason="$reason"
+	if [ "$want" = "1" ]; then state_name=on; else state_name=off; fi
+	write_state "$state_name" "$temp_display" "$reason"
+	record_event "$state_name" "$reason" "$temp_display" || true
+	log "USB power -> $want ($reason)"
+	return 0
+}
+
+state_name() {
+	case "$1" in
+		1) echo on ;;
+		0) echo off ;;
+		*) echo unknown ;;
+	esac
+}
+
+run_daemon() {
+	local temp_raw desired oldpid state_text saved_state first_loop=1
+
+	load_config
+	if ! check_config; then
+		echo "usbpowerd: configuration invalid" >&2
+		exit 1
+	fi
+
+	if [ -f "$PID_FILE" ]; then
+		oldpid=$(cat "$PID_FILE" 2>/dev/null)
+		if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
+			echo "usbpowerd: already running (pid $oldpid)" >&2
+			exit 1
+		fi
+	fi
+	echo $$ > "$PID_FILE"
+
+	log "started: backend=$backend mode=$mode sensor=$sensor"
+
+	last_change=$(state_get last_change)
+	[ -n "$last_change" ] || last_change=0
+	current=$(backend_read)
+	saved_state=$(state_get state)
+	if [ "$saved_state" != "$(state_name "$current")" ]; then
+		last_change=0
+	fi
+	temp_display=-1
+	sensor_ok=1
+	sensor_fail=0
+	last_reason=startup
+
+	state_text=$(state_name "$current")
+	write_state "$state_text" "$temp_display" "$last_reason"
+
+	trap 'log "stopping"; rm -f "$PID_FILE" "$STATUS_CACHE"; exit 0' INT TERM
+
+	# Apply forced modes immediately at startup.
+	if [ "$mode" = "always_on" ] && [ "$current" != "1" ]; then
+		set_level 1 startup
+	elif [ "$mode" = "always_off" ] && [ "$current" != "0" ]; then
+		set_level 0 startup
+	fi
+
+	while :; do
+		if temp_raw=$(read_temp_milli); then
+			sensor_ok=1
+			sensor_fail=0
+			temp_display=$(temp_to_display "$temp_raw")
+			desired=
+
+			case "$mode" in
+				always_on)
+					desired=1
+					;;
+				always_off)
+					desired=0
+					;;
+				auto)
+					if [ "$current" != "1" ] && [ "$temp_raw" -gt $((on_threshold * sensor_divisor)) ]; then
+						desired=1
+					elif [ "$current" != "0" ] && [ "$temp_raw" -le $((off_threshold * sensor_divisor)) ]; then
+						desired=0
+					fi
+					;;
+			esac
+
+			if [ -n "$desired" ] && [ "$desired" != "$current" ]; then
+				if [ "$current" != "unknown" ] && [ "$first_loop" != "1" ] && ! may_switch; then
+					:
+				elif [ "$desired" = "0" ] && storage_mounted; then
+					last_reason=blocked_storage
+					log "power-off blocked: a /dev/sd* storage is mounted"
+					write_state "on" "$temp_display" "$last_reason"
+				else
+					set_level "$desired" "temperature=$temp_display" || true
+				fi
+			fi
+		else
+			sensor_ok=0
+			sensor_fail=$((sensor_fail + 1))
+			temp_display=-1
+			if [ "$sensor_fail" -ge 3 ] && [ "$current" != "1" ] && [ "$mode" = "auto" ]; then
+				log "sensor read failed $sensor_fail times, forcing USB power on"
+				last_reason=sensor_error
+				set_level 1 sensor_error || true
+			fi
+		fi
+
+		write_state "$(state_name "$current")" "$temp_display" "$last_reason"
+		( status_json ) > "$STATUS_CACHE.tmp" 2>/dev/null && mv "$STATUS_CACHE.tmp" "$STATUS_CACHE"
+		first_loop=0
+		sleep "$poll_interval"
+	done
+}
+
+status_json() {
+	local running=0 pid state_text temp_raw temp_value configured=false
+	local sensor_live=0 guard=false reason target=""
+
+	load_config
+	if check_config >/dev/null 2>&1; then
+		configured=true
+	fi
+
+	if [ -f "$PID_FILE" ]; then
+		pid=$(cat "$PID_FILE" 2>/dev/null)
+		if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+			running=1
+		fi
+	fi
+
+	if temp_raw=$(read_temp_milli); then
+		sensor_live=1
+		temp_value=$(temp_to_display "$temp_raw")
+	else
+		temp_value=-1
+	fi
+
+	current=$(backend_read)
+	state_text=$(state_name "$current")
+	if [ "$state_text" = "unknown" ]; then
+		state_text=$(state_get state)
+		[ -n "$state_text" ] || state_text=unknown
+	fi
+
+	last_change=$(state_get last_change)
+	[ -n "$last_change" ] || last_change=0
+	reason=$(state_get reason)
+	[ -n "$reason" ] || reason=unknown
+
+	if storage_mounted; then
+		guard=true
+	fi
+
+	case "$backend" in
+		gpio) target="$gpio_path" ;;
+		regulator) target="$regulator_path" ;;
+		uhubctl) target="$uhubctl_location port $uhubctl_port" ;;
+		command) target="custom command" ;;
+	esac
+
+	printf '{"running":%s,"enabled":%s,"configured":%s,"backend":"%s","target":"%s","mode":"%s","state":"%s","temp":%s,"sensor_ok":%s,"on":%s,"off":%s,"last_change":%s,"reason":"%s","guard":%s,"history":%s,"logs":%s}\n' \
+		"$([ "$running" = "1" ] && echo true || echo false)" \
+		"$([ "$enabled" = "1" ] && echo true || echo false)" \
+		"$configured" \
+		"$(jesc "$backend")" \
+		"$(jesc "$target")" \
+		"$(jesc "$mode")" \
+		"$(jesc "$state_text")" \
+		"$temp_value" \
+		"$([ "$sensor_live" = "1" ] && echo true || echo false)" \
+		"$on_threshold" \
+		"$off_threshold" \
+		"$last_change" \
+		"$(jesc "$reason")" \
+		"$guard" \
+		"$(history_json)" \
+		"$(logs_json)"
+}
+
+detect_json() {
+	local targets= targets_sep= sensors= sensors_sep=
+	local p name d raw type line rest loc ports i value
+
+	add_target() {
+		targets="$targets$targets_sep$1"
+		targets_sep=,
+	}
+
+	add_sensor() {
+		sensors="$sensors$sensors_sep$1"
+		sensors_sep=,
+	}
+
+	for p in /sys/class/gpio/*/value; do
+		[ -e "$p" ] || continue
+		[ -w "$p" ] || continue
+		case "$p" in
+			*/gpiochip*/value) continue ;;
+		esac
+		name=${p%/value}
+		name=${name##*/}
+		add_target "$(printf '{"backend":"gpio","path":"%s","label":"GPIO %s"}' "$(jesc "$p")" "$(jesc "$name")")"
+	done
+
+	for d in /sys/class/regulator/regulator.*; do
+		[ -d "$d" ] || continue
+		name=$(cat "$d/name" 2>/dev/null)
+		case "$name" in
+			*[Uu][Ss][Bb]*|*[Vv][Bb][Uu][Ss]*) ;;
+			*) continue ;;
+		esac
+		[ -w "$d/state" ] || continue
+		add_target "$(printf '{"backend":"regulator","path":"%s","label":"regulator %s"}' "$(jesc "$d/state")" "$(jesc "$name")")"
+	done
+
+	if command -v uhubctl >/dev/null 2>&1; then
+		value=$(uhubctl 2>/dev/null)
+		while IFS= read -r line; do
+			case "$line" in
+				"Current status for hub "*)
+					rest=${line#Current status for hub }
+					loc=${rest%% *}
+					ports=$(printf '%s' "$line" | sed -n 's/.* \([0-9][0-9]*\) ports.*/\1/p')
+					[ -n "$ports" ] || ports=1
+					i=1
+					while [ "$i" -le "$ports" ] && [ "$i" -le 16 ]; do
+						add_target "$(printf '{"backend":"uhubctl","location":"%s","port":"%s","label":"uhubctl %s port %s"}' "$(jesc "$loc")" "$i" "$(jesc "$loc")" "$i")"
+						i=$((i + 1))
+					done
+					;;
+			esac
+		done <<EOF
+$value
+EOF
+	fi
+
+	for d in /sys/class/thermal/thermal_zone*; do
+		[ -d "$d" ] || continue
+		type=$(cat "$d/type" 2>/dev/null)
+		raw=$(cat "$d/temp" 2>/dev/null)
+		value=-1
+		case "$raw" in
+			''|*[!0-9]*) ;;
+			*) value=$(awk -v t="$raw" 'BEGIN { printf "%.1f", t / 1000 }') ;;
+		esac
+		add_sensor "$(printf '{"path":"%s","type":"%s","temp":%s}' "$(jesc "$d/temp")" "$(jesc "$type")" "$value")"
+	done
+
+	printf '{"targets":[%s],"sensors":[%s]}\n' "$targets" "$sensors"
+}
+
+case "$1" in
+	run)
+		run_daemon
+		;;
+	check)
+		load_config
+		check_config || exit 1
+		;;
+	status-json)
+		status_json
+		;;
+	detect)
+		detect_json
+		;;
+	*)
+		printf 'Usage: %s {run|check|status-json|detect}\n' "$0" >&2
+		exit 1
+		;;
+esac
+
+exit 0

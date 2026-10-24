@@ -1,0 +1,45 @@
+#!/bin/sh
+# Manual control helper for the LuCI frontend.
+# Usage: usbpower-temperature-ctl on|off|auto
+
+CONFIG=usbpower_temperature
+
+case "$1" in
+	on)
+		mode=always_on
+		;;
+	off)
+		mode=always_off
+		;;
+	auto)
+		mode=auto
+		;;
+	*)
+		echo "Usage: $0 on|off|auto" >&2
+		exit 1
+		;;
+esac
+
+if ! /usr/sbin/usbpowerd check >/dev/null 2>&1; then
+	echo "USB power configuration is invalid:" >&2
+	/usr/sbin/usbpowerd check >&2
+	exit 1
+fi
+
+guard=$(uci -q get "$CONFIG.settings.storage_guard")
+[ -n "$guard" ] || guard=1
+if [ "$mode" = "always_off" ] && [ "$guard" = "1" ] && mount 2>/dev/null | grep -q '^/dev/sd'; then
+	echo "Refusing to power off: a mounted /dev/sd* storage was detected." >&2
+	echo "Disable storage_guard only if you are sure the storage is unused." >&2
+	exit 2
+fi
+
+uci set "$CONFIG.settings.mode=$mode"
+uci set "$CONFIG.settings.enabled=1"
+uci commit "$CONFIG"
+
+/etc/init.d/usbpower_temperature enable
+/etc/init.d/usbpower_temperature restart
+sleep 2
+
+/usr/sbin/usbpowerd status-json

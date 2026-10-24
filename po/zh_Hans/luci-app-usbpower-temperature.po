@@ -1,0 +1,229 @@
+# Simplified Chinese translation for luci-app-usbpower-temperature.
+msgid ""
+msgstr ""
+"Project-Id-Version: luci-app-usbpower-temperature\n"
+"Language: zh_Hans\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "Unknown"
+msgstr "未知"
+
+msgid "Powered"
+msgstr "通电"
+
+msgid "Unpowered"
+msgstr "断电"
+
+msgid "Always on"
+msgstr "强制通电"
+
+msgid "Always off"
+msgstr "强制断电"
+
+msgid "Service running"
+msgstr "运行中"
+
+msgid "Service stopped"
+msgstr "已停止"
+
+msgid "Service unavailable"
+msgstr "不可用"
+
+msgid "Detected control targets"
+msgstr "检测到的控制目标"
+
+msgid "No usable control target was detected. Fill in the matching fields below manually."
+msgstr "未检测到可用的控制目标，请手动填写下方对应参数。"
+
+msgid "Use this"
+msgstr "使用"
+
+msgid "Detected temperature sensors"
+msgstr "检测到的温度传感器"
+
+msgid "No temperature sensor was detected. Enter the sensor path manually."
+msgstr "未检测到温度传感器，请手动填写传感器路径。"
+
+msgid "SoC temperature"
+msgstr "SoC 温度"
+
+msgid "USB power"
+msgstr "USB 供电"
+
+msgid "Thermal mode"
+msgstr "工作模式"
+
+msgid "Power target"
+msgstr "控制目标"
+
+msgid "Service state"
+msgstr "服务状态"
+
+msgid "Last change"
+msgstr "最后切换"
+
+msgid "A mounted storage device was detected; automatic power-off is blocked."
+msgstr "检测到已挂载的存储设备，自动断电已被阻止。"
+
+msgid "No valid control target is configured, so the service will not start. Use the detection results or fill in the fields manually."
+msgstr "尚未配置有效的控制目标，服务不会启动。请使用“检测”结果或手动填写。"
+
+msgid "Temperature sensor read failed; automatic mode will force power on."
+msgstr "温度传感器读取失败；自动模式下会强制通电。"
+
+msgid "Current status"
+msgstr "当前状态"
+
+msgid "Power on now"
+msgstr "立即通电"
+
+msgid "Power off now"
+msgstr "立即断电"
+
+msgid "Resume automatic"
+msgstr "恢复自动"
+
+msgid "Hardware detection"
+msgstr "硬件检测"
+
+msgid "Detect again"
+msgstr "重新检测"
+
+msgid "USB Thermal Fan"
+msgstr "USB 温控风扇"
+
+msgid "Automatically control the power of the selected USB port based on the SoC temperature. A minimum dwell time prevents frequent switching."
+msgstr "根据 SoC 温度自动控制指定 USB 端口的供电。切换存在最小驻留时间，避免频繁通断。"
+
+msgid "Settings"
+msgstr "设置"
+
+msgid "Enable service"
+msgstr "启用服务"
+
+msgid "Automatic (by temperature)"
+msgstr "自动（按温度）"
+
+msgid "Control method"
+msgstr "控制方式"
+
+msgid "Select how this USB port power is actually switched. Use \"Detect again\" below to find candidates first."
+msgstr "选择该 USB 端口电源的实际控制方式；可先用下方“重新检测”查找候选。"
+
+msgid "sysfs GPIO"
+msgstr "sysfs GPIO"
+
+msgid "regulator sysfs"
+msgstr "regulator sysfs"
+
+msgid "Custom command"
+msgstr "自定义命令"
+
+msgid "GPIO value path"
+msgstr "GPIO value 路径"
+
+msgid "uhubctl location (-l)"
+msgstr "uhubctl 位置（-l）"
+
+msgid "uhubctl port (-p)"
+msgstr "uhubctl 端口（-p）"
+
+msgid "regulator state path"
+msgstr "regulator state 路径"
+
+msgid "Power-on command"
+msgstr "通电命令"
+
+msgid "Power-off command"
+msgstr "断电命令"
+
+msgid "Optional state command"
+msgstr "状态查询命令（可选）"
+
+msgid "The command must output 1 when powered and 0 when off; leave empty to show the state as unknown."
+msgstr "命令输出 1 表示已通电，输出 0 表示已断电；不填则状态显示为未知。"
+
+msgid "Temperature sensor path"
+msgstr "温度传感器路径"
+
+msgid "Temperature divisor"
+msgstr "温度换算除数"
+
+msgid "The raw sysfs value is divided by this number to get degrees Celsius, usually 1000."
+msgstr "sysfs 原始值除以该数字得到摄氏度，通常为 1000。"
+
+msgid "Power-on threshold (°C)"
+msgstr "通电阈值 (°C)"
+
+msgid "Power on when the temperature is above this value."
+msgstr "温度高于该值时通电。"
+
+msgid "Power-off threshold (°C)"
+msgstr "断电阈值 (°C)"
+
+msgid "Power off when the temperature is at or below this value; it must be lower than the power-on threshold."
+msgstr "温度低于或等于该值时断电；必须低于通电阈值。"
+
+msgid "Poll interval (seconds)"
+msgstr "轮询间隔（秒）"
+
+msgid "Minimum on time (seconds)"
+msgstr "最短通电时间（秒）"
+
+msgid "Minimum off time (seconds)"
+msgstr "最短断电时间（秒）"
+
+msgid "Storage guard"
+msgstr "存储保护"
+
+msgid "Refuse automatic or manual power-off while a /dev/sd* storage is mounted."
+msgstr "当检测到已挂载的 /dev/sd* 存储设备时，拒绝自动或手动断电。"
+
+msgid "Invalid configuration"
+msgstr "配置无效"
+
+msgid "Failed to restart the service"
+msgstr "服务重启失败"
+
+msgid "Recent switches"
+msgstr "最近切换"
+
+msgid "Time"
+msgstr "时间"
+
+msgid "Switch action"
+msgstr "动作"
+
+msgid "Reason"
+msgstr "原因"
+
+msgid "Temperature"
+msgstr "温度"
+
+msgid "Startup"
+msgstr "启动"
+
+msgid "Sensor error"
+msgstr "传感器错误"
+
+msgid "No switching events yet."
+msgstr "暂无切换记录。"
+
+msgid "Recent log"
+msgstr "最近日志"
+
+msgid "No log entries yet."
+msgstr "暂无日志。"
+
+msgid "Status request failed: %s"
+msgstr "状态请求失败：%s"
+
+msgid "History or log rendering failed: %s"
+msgstr "历史/日志渲染失败：%s"
+
+msgid "Reload the page and log in again if the problem persists."
+msgstr "如果持续出现，请刷新页面并重新登录。"
+

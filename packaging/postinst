@@ -1,0 +1,8 @@
+#!/bin/sh
+[ -n "$IPKG_INSTROOT" ] && exit 0
+
+/etc/init.d/rpcd reload >/dev/null 2>&1
+/etc/init.d/usbpower_temperature enable
+[ "$(uci -q get usbpower_temperature.settings.enabled)" = "1" ] && /etc/init.d/usbpower_temperature restart
+rm -f /tmp/luci-indexcache* 2>/dev/null
+exit 0

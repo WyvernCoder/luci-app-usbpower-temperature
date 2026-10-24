@@ -1,0 +1,19 @@
+{
+	"luci-app-usbpower-temperature": {
+		"description": "Grant access to the USB port temperature controller",
+		"read": {
+			"file": {
+				"/usr/sbin/usbpowerd": [ "exec" ],
+				"/tmp/usbpowerd.status.json": [ "read" ]
+			},
+			"uci": [ "usbpower_temperature" ]
+		},
+		"write": {
+			"file": {
+				"/usr/sbin/usbpower-temperature-ctl": [ "exec" ],
+				"/etc/init.d/usbpower_temperature": [ "exec" ]
+			},
+			"uci": [ "usbpower_temperature" ]
+		}
+	}
+}
