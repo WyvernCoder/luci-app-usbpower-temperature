@@ -2,7 +2,9 @@
 
 **English** | [简体中文](./README_zh.md)
 
-A LuCI application that switches a USB port's VBUS based on the SoC temperature. It is designed for control the USB fan or any other device without a data connection based on CPU temperature.
+A LuCI application that switches a USB port's VBUS based on the SoC temperature. It is designed for control the USB fan or any other device without a data connection based on CPU temperature. 
+
+~~FYI, DO NOT place eggs on your router, otherwise you will get cute little chicks!~~ 
 
 Default policy: **power on above 65 °C, power off at or below 60 °C**. The 5 °C hysteresis, a minimum on-time of 300 s and a minimum off-time of 120 s prevent rapid switching.
 
