@@ -11,7 +11,7 @@
 ## 运行时架构
 
 ```
-LuCI JS 视图 (overview-v3.js)
+LuCI JS 视图 (overview-v4.js)
    │  UCI 读写 / fs.exec (rpcd ACL)
    ▼
 UCI /etc/config/usbpower_temperature
@@ -28,7 +28,8 @@ UCI /etc/config/usbpower_temperature
 - 守护进程每 `poll_interval` 秒读一次温度；比较使用整数毫摄氏度（原始值 × `sensor_divisor`），避免浮点。
 - 状态写入 `/var/run/usbpowerd.state`（key=value），供 `status-json` 读取；pid 写入 `/var/run/usbpowerd.pid`。
 - 最近 10 次实际切换写入 `/tmp/usbpowerd.history`（`时间|状态|原因|温度`），`status-json` 以 `history` 数组返回；`/tmp` 在重启后清空。
-- 最近 50 行守护进程日志写入 `/tmp/usbpowerd.log`（`时间|消息`），`status-json` 以 `logs` 数组返回；日志同时继续写 syslog（`logger -t usbpowerd`）。
+- 最近 200 行守护进程日志写入 `/tmp/usbpowerd.log`（`时间|消息`），`status-json` 以 `logs` 数组返回；事件日志同时继续写 syslog（`logger -t usbpowerd`）。
+- 守护进程每 120 秒向日志追加一条 `heartbeat: temp=... state=... mode=...`；心跳只写文件、不写 syslog，页面关闭时也会继续产生。
 - 每轮循环在子 shell 里把 `status-json` 结果写入 `/tmp/usbpowerd.status.json`，供前端在 `fs.exec` 失败时用 `fs.read` 回退读取；服务停止时删除该缓存。
 - 所有切换都回读校验；`command` 后端没有 `command_state` 时状态视为 unknown，但写命令返回值仍会检查。
 - 服务停止不改 GPIO 当前值；重启后由固件默认逻辑先上电，再由插件接管。
@@ -42,7 +43,7 @@ UCI /etc/config/usbpower_temperature
 | `root/usr/sbin/usbpowerd` | 主守护进程；子命令 `run`、`check`、`status-json`、`detect` |
 | `root/usr/sbin/usbpower-temperature-ctl` | 手动切换 `on`/`off`/`auto`，写 UCI 后重启服务 |
 | `root/etc/...`、`root/usr/share/luci/...` | 菜单和 rpcd ACL |
-| `root/www/luci-static/resources/view/usbpower-temperature/overview-v3.js` | LuCI 视图 |
+| `root/www/luci-static/resources/view/usbpower-temperature/overview-v4.js` | LuCI 视图 |
 | `root/usr/lib/lua/luci/i18n/luci-app-usbpower-temperature.zh-cn.lmo` | 编译后的简体中文目录（构建产物，提交到仓库） |
 | `po/zh_Hans/luci-app-usbpower-temperature.po` | 翻译源文件 |
 | `packaging/` | ipk 的 postinst/prerm/postrm |
@@ -99,7 +100,8 @@ UCI /etc/config/usbpower_temperature
   ],
   "logs": [
     { "ts": 1792826873, "msg": "started: backend=gpio mode=auto sensor=/sys/class/thermal/thermal_zone0/temp" },
-    { "ts": 1792826874, "msg": "USB power -> 1 (temperature=66.0)" }
+    { "ts": 1792826874, "msg": "USB power -> 1 (temperature=66.0)" },
+    { "ts": 1792826994, "msg": "heartbeat: temp=66.0 state=on mode=auto" }
   ]
 }
 ```
@@ -107,7 +109,7 @@ UCI /etc/config/usbpower_temperature
 - `state=unknown` 时前端回退读取 state 文件。
 - `temp=-1` 表示当前读取失败。
 - `guard=true` 表示检测到存储挂载（仅当 `storage_guard=1`）。
-- `history` 是切换记录（升序，最多 10 条）；`logs` 是守护进程日志（升序，最多 50 条）。UI 都按最新在前展示。
+- `history` 是切换记录（升序，最多 10 条）；`logs` 是守护进程日志（升序，最多 200 条，包含每 2 分钟一次的心跳）。UI 都按最新在前展示。
 
 ### `detect` 输出
 
@@ -124,7 +126,7 @@ UCI /etc/config/usbpower_temperature
 
 ## 本地化（i18n）
 
-- **英文是源语言**：`overview-v3.js` 和 `menu.d` 菜单标题必须使用英文，并用 `_('English string')` 包裹；禁止在 JS 里硬编码中文。
+- **英文是源语言**：`overview-v4.js` 和 `menu.d` 菜单标题必须使用英文，并用 `_('English string')` 包裹；禁止在 JS 里硬编码中文。
 - 简体中文来自 `po/zh_Hans/luci-app-usbpower-temperature.po`，由 `python3 tools/build_lmo.py` 编译成 `root/usr/lib/lua/luci/i18n/luci-app-usbpower-temperature.zh-cn.lmo`。
 - LuCI 的 `_()` 用 SuperFastHash（UTF-8）作为键；LMO 的索引必须按 key hash 升序排列，否则 LuCI 的二分查找会失败。不要手改 `.lmo`，只改 `.po` 后重新生成。
 - `python3 tools/build_lmo.py --check` 用于校验已提交的 `.lmo` 是否与 `.po` 一致；`tools/build_ipk.py` 会在打包前自动执行该检查，不一致直接失败。
@@ -139,7 +141,7 @@ UCI /etc/config/usbpower_temperature
 python3 tools/build_ipk.py
 ```
 
-产物：`dist/luci-app-usbpower-temperature_1.3.2-1_all.ipk`。该文件是 gzip 压缩的 tar（含 `./debian-binary`、`./data.tar.gz`、`./control.tar.gz`），与本项目验证过的 opkg 版本一致；`Makefile` 供 OpenWrt SDK 正式构建。
+产物：`dist/luci-app-usbpower-temperature_1.3.3-1_all.ipk`。该文件是 gzip 压缩的 tar（含 `./debian-binary`、`./data.tar.gz`、`./control.tar.gz`），与本项目验证过的 opkg 版本一致；`Makefile` 供 OpenWrt SDK 正式构建。
 
 版本发布时同步更新：
 
@@ -202,9 +204,9 @@ PATH=/tmp/fakebin:/usr/sbin:/usr/bin:/sbin:/bin /usr/sbin/usbpowerd run
 
 ### 前端
 
-- 静态资源应返回 HTTP 200：`/luci-static/resources/view/usbpower-temperature/overview-v3.js`
+- 静态资源应返回 HTTP 200：`/luci-static/resources/view/usbpower-temperature/overview-v4.js`
 - 页面需要登录后访问：`/cgi-bin/luci/admin/system/usbpower-temperature`
-- 视图文件名带版本（`overview-v3.js`），用于打破浏览器缓存；大幅改 UI 后若用户仍看到旧界面，重命名视图文件并同步 `menu.d` 的 `path`。
+- 视图文件名带版本（`overview-v4.js`），用于打破浏览器缓存；大幅改 UI 后若用户仍看到旧界面，重命名视图文件并同步 `menu.d` 的 `path`。
 - 状态读取优先 `fs.exec('/usr/sbin/usbpowerd',['status-json'])`，失败时回退 `fs.read('/tmp/usbpowerd.status.json')`；两者都失败才显示“服务不可用”，并显示可读错误（含重新登录提示）。
 - 修改 UCI 后确认 `service rpcd reload` 已执行，菜单/ACL 才会刷新。
 - 本地化检查（无需登录）：`curl -s http://localhost/cgi-bin/luci/admin/translations/zh-cn` 应包含 `.po` 中的中文，例如 `USB 温控风扇`；`/translations/en` 应为空对象，英文界面直接显示源字符串。
@@ -257,7 +259,8 @@ PATH=/tmp/fakebin:/usr/sbin:/usr/bin:/sbin:/bin /usr/sbin/usbpowerd run
 - [ ] 设备上安装/卸载/重装正常，配置保留
 - [ ] 65/60 回差、驻留、存储保护、传感器故障测试通过
 - [ ] 切换记录最多 10 条、按时间升序存储、UI 按最新在前展示
-- [ ] 日志最多 50 条、包含启动/切换/停止信息，UI 可显示
+- [ ] 日志最多 200 条、包含启动/切换/停止信息，UI 可显示
+- [ ] 关闭页面后等待 2 个心跳周期，日志仍出现新的 `heartbeat:` 行；syslog 中无 heartbeat
 - [ ] `/tmp/usbpowerd.status.json` 内容可解析；`fs.exec` 失败时 UI 能回退到 `fs.read`
 - [ ] `/admin/translations/zh-cn` 包含新文案，英文界面仍显示英文
 - [ ] README/AGENTS 隐私自查通过

@@ -227,3 +227,6 @@ msgstr "历史/日志渲染失败：%s"
 msgid "Reload the page and log in again if the problem persists."
 msgstr "如果持续出现，请刷新页面并重新登录。"
 
+msgid "The daemon writes a heartbeat log every 2 minutes, even when this page is closed."
+msgstr "即使关闭本页面，后台也会每 2 分钟写入一条心跳日志。"
+

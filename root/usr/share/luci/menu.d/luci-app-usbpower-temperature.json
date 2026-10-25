@@ -4,7 +4,7 @@
 		"order": 60,
 		"action": {
 			"type": "view",
-			"path": "usbpower-temperature/overview-v3"
+			"path": "usbpower-temperature/overview-v4"
 		},
 		"depends": {
 			"acl": [ "luci-app-usbpower-temperature" ],

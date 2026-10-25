@@ -22,15 +22,22 @@ PID_FILE=/var/run/usbpowerd.pid
 HISTORY_FILE=/tmp/usbpowerd.history
 HISTORY_LIMIT=10
 LOG_FILE=/tmp/usbpowerd.log
-LOG_LIMIT=50
+LOG_LIMIT=200
+HEARTBEAT_INTERVAL=120
 STATUS_CACHE=/tmp/usbpowerd.status.json
 
-log() {
+append_log() {
 	local msg="$*" tmp="${LOG_FILE}.$$"
 
-	logger -t usbpowerd "$msg"
 	printf '%s|%s\n' "$(date +%s)" "$msg" >> "$LOG_FILE" 2>/dev/null
 	tail -n "$LOG_LIMIT" "$LOG_FILE" > "$tmp" 2>/dev/null && mv "$tmp" "$LOG_FILE"
+}
+
+log() {
+	local msg="$*"
+
+	logger -t usbpowerd "$msg"
+	append_log "$msg"
 }
 
 cfg() {
@@ -394,7 +401,7 @@ state_name() {
 }
 
 run_daemon() {
-	local temp_raw desired oldpid state_text saved_state first_loop=1
+	local temp_raw desired oldpid state_text saved_state first_loop=1 last_heartbeat=0 now
 
 	load_config
 	if ! check_config; then
@@ -483,6 +490,11 @@ run_daemon() {
 		fi
 
 		write_state "$(state_name "$current")" "$temp_display" "$last_reason"
+		now=$(date +%s)
+		if [ $((now - last_heartbeat)) -ge "$HEARTBEAT_INTERVAL" ]; then
+			append_log "heartbeat: temp=$temp_display state=$(state_name "$current") mode=$mode"
+			last_heartbeat=$now
+		fi
 		( status_json ) > "$STATUS_CACHE.tmp" 2>/dev/null && mv "$STATUS_CACHE.tmp" "$STATUS_CACHE"
 		first_loop=0
 		sleep "$poll_interval"

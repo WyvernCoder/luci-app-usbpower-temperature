@@ -27,7 +27,7 @@ PACKAGING = REPO / "packaging"
 DIST = REPO / "dist"
 
 PKG_NAME = "luci-app-usbpower-temperature"
-PKG_VERSION = "1.3.2"
+PKG_VERSION = "1.3.3"
 PKG_RELEASE = "1"
 PKG_ARCH = "all"
 PKG_MAINTAINER = "luci-app-usbpower-temperature contributors"

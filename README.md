@@ -22,7 +22,7 @@ Default policy: **power on above 65 °C, power off at or below 60 °C**. The 5 �
 - LuCI status card with 5-second polling and manual power-on/off buttons
 - USB power state is shown first and color-coded (Powered/Unpowered); the thermal mode stays in the settings form
 - Last 10 switching events in the UI (time, action, reason and temperature; stored in `/tmp/usbpowerd.history` and cleared on reboot)
-- On-page recent log with the last 50 daemon log lines (`/tmp/usbpowerd.log`, cleared on reboot)
+- On-page recent log with the last 200 daemon log lines (`/tmp/usbpowerd.log`, cleared on reboot); the daemon appends a heartbeat line every 2 minutes, also while the page is closed
 - Storage guard: refuses to cut power while a `/dev/sd*` storage is mounted
 - Sensor fail-safe: in automatic mode, forces power on after repeated read failures
 - English and Simplified Chinese UI, following the LuCI language setting
@@ -61,15 +61,15 @@ Build:
 python3 tools/build_ipk.py
 
 ROUTER='root@<router>'
-scp dist/luci-app-usbpower-temperature_1.3.2-1_all.ipk "$ROUTER:/tmp/"
-ssh "$ROUTER" 'opkg install /tmp/luci-app-usbpower-temperature_1.3.2-1_all.ipk'
+scp dist/luci-app-usbpower-temperature_1.3.3-1_all.ipk "$ROUTER:/tmp/"
+ssh "$ROUTER" 'opkg install /tmp/luci-app-usbpower-temperature_1.3.3-1_all.ipk'
 ```
 
 If the router does not have `openssh-sftp-server`, a modern `scp` may fail. Use the stream transfer instead:
 
 ```sh
 ROUTER='root@<router>'
-ssh "$ROUTER" 'cat > /tmp/luci-app-usbpower-temperature.ipk' < dist/luci-app-usbpower-temperature_1.3.2-1_all.ipk
+ssh "$ROUTER" 'cat > /tmp/luci-app-usbpower-temperature.ipk' < dist/luci-app-usbpower-temperature_1.3.3-1_all.ipk
 ssh "$ROUTER" 'opkg install /tmp/luci-app-usbpower-temperature.ipk'
 ```
 
@@ -83,6 +83,8 @@ or through **System → USB Thermal Fan**.
 
 After an upgrade, reload the page. The view asset is versioned to avoid stale browser caches; if the layout still looks old, close and reopen the tab.
 
+The controller runs as a procd service and is independent of the LuCI page. Closing the tab does not stop temperature control. Normal log entries are event-driven (start, stop, switch, storage guard, sensor errors), so the daemon also writes a `heartbeat:` line to `/tmp/usbpowerd.log` every 2 minutes; this line is written to the log file only, not to syslog, so the recent log keeps moving even when the temperature is stable.
+
 #### Development install (Windows PowerShell)
 
 ```powershell
@@ -95,7 +97,7 @@ $Router = 'root@<router>'
 Do not mix direct installs with `opkg`. If the files were removed by the direct installer while opkg still thinks the package is installed, restore them with:
 
 ```sh
-opkg install --force-reinstall /tmp/luci-app-usbpower-temperature_1.3.2-1_all.ipk
+opkg install --force-reinstall /tmp/luci-app-usbpower-temperature_1.3.3-1_all.ipk
 ```
 
 ### Configuration
@@ -182,7 +184,7 @@ python3 tools/build_ipk.py
 Output:
 
 ```
-dist/luci-app-usbpower-temperature_1.3.2-1_all.ipk
+dist/luci-app-usbpower-temperature_1.3.3-1_all.ipk
 ```
 
 On Windows:
